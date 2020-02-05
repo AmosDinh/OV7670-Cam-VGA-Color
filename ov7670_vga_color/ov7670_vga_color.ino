@@ -590,6 +590,72 @@ static void StringPgm(const char *str)
         serialWrB(pgm_read_byte_near(str));
     } while (pgm_read_byte_near(++str));
 }
+
+/*
+I did not know this, since I am a newbie so I added some info
+  https://www.arduino.cc/en/Reference/PortManipulation
+
+  B (digital pin 8 to 13)
+  C (analog input pins)
+  D (digital pins 0 to 7)
+
+  DDR determines whether the pin is an INPUT or OUTPUT
+  PORT controls whether the pin is HIGH or LOW
+  PIN reads the state of INPUT pins set to input with pinMode()
+
+  PORTD maps to Arduino digital pins 0 to 7
+
+      DDRD - The Port D Data Direction Register - read/write
+      PORTD - The Port D Data Register - read/write
+      PIND - The Port D Input Pins Register - read only
+
+
+  PORTB maps to Arduino digital pins 8 to 13 The two high bits (6 & 7) map to the crystal pins and are not usable
+
+      DDRB - The Port B Data Direction Register - read/write
+      PORTB - The Port B Data Register - read/write
+      PINB - The Port B Input Pins Register - read only
+
+      
+  PORTC maps to Arduino analog pins 0 to 5. Pins 6 & 7 are only accessible on the Arduino Mini
+
+      DDRC - The Port C Data Direction Register - read/write
+      PORTC - The Port C Data Register - read/write
+      PINC - The Port C Input Pins Register - read only
+
+
+
+GERMAN:
+  1. PIND ist der Bit-Zustand der Pins am Port D.
+
+  2. 8 = Binär 00001000 , dass heißt BIT Nr. 3 ist gesetzt
+ 
+    000000001 = 1 // Bit 0 gesetzt
+    000000010 = 2 // Bit 1 gesetzt
+    000000100 = 4 // Bit 2 gesetzt
+    ...
+    100000000 = 128 // Bit 7 gesetzt
+
+  3. (PIND & 8)  binäres und -> falls am Port D pin 3 gesetzt ist, ist
+  das ergebnis ebenfalls 8, sonst null
+
+  4. if(PIND & 8)   0 bedeutet Falsch, alles was nicht 0 ist bedeutet
+  Wahr.
+ 
+
+  Num.|  Pin
+  1       0
+  2       1
+  4       2
+  8       3
+  16      4
+  32      5
+  64      6
+  128     7
+  256     8
+
+  */
+
 static void captureImg(uint16_t wg, uint16_t hg)
 {
     uint16_t lg2;
@@ -600,7 +666,9 @@ static void captureImg(uint16_t wg, uint16_t hg)
 #endif
 
     //Wait for vsync it is on pin 3 (counting from 0) portD
+    //*RDY* is the bitsequence that lets the java end know when an image starts.
     StringPgm(PSTR("*RDY*"));
+    //        D3=VSYNC
     while (!(PIND & 8))
         ; //wait for high
     while ((PIND & 8))
@@ -611,20 +679,19 @@ static void captureImg(uint16_t wg, uint16_t hg)
     {
         lg2 = wg;
         while (lg2--)
-        {
+        { //      D2= PCLK
             while ((PIND & 4))
 
                 ;
 
             //wait for low
+            //ino pins: A3-A0  |   D7-D4
+            //  00001111 = 15 11110000 = 240
             UDR0 = (PINC & 15) | (PIND & 240);
-            /*   StringPgm(PSTR("000")); */
             while (!(PIND & 4))
                 ; //wait for high
         }
     }
-    /*    StringPgm(PSTR("*FIN*"));
-    _delay_ms(2000); */
 
 #elif defined(useQvga)
     //We send half of the line while reading then half later
@@ -632,10 +699,8 @@ static void captureImg(uint16_t wg, uint16_t hg)
     {
         lg2 = wg;
         //href
-        /* StringPgm(PSTR("000")); */
         /*  while ((PIND & 256));  */
         //wait for high
-        /*   StringPgm(PSTR("ooo")); */
         while (lg2--)
         {
 
@@ -655,12 +720,10 @@ static void captureImg(uint16_t wg, uint16_t hg)
             while (!(PIND & 4))
                 ;
             //wait for high
-            // ^ this is only taking very second byte, starting with the first
+            // ^ this is only taking every second byte, starting with the first
         }
-        /*  StringPgm(PSTR("000")); */
         /*   while (!(PIND & 256))
             ; */
-        /*    StringPgm(PSTR("ooo")); */
     }
 #else
     // This code is very similar to qvga sending code except we have even more blanking time to take advantage of
@@ -738,7 +801,7 @@ void setup()
 #ifdef useVga
     setRes(VGA);
     setColorSpace(BAYER_RGB);
-    wrReg(0x11, 30); //original:    wrReg(0x11, 25);
+    wrReg(0x11, 30); //original:    wrReg(0x11, 25); //change to adjust speed/ speed can be tradeof for data corruption, below 30 for me
 #elif defined(useQvga)
     setRes(QVGA);
     setColorSpace(YUV422);

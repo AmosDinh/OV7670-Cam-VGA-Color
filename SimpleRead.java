@@ -1,12 +1,13 @@
 // compiled with Java 8 
 // javac --release 8 -cp "comm.jar" BMP.java SimpleRead.java
-//get major version:  javap -verbose myClass | findstr "major"
+//to get major version:  javap -verbose myClass | findstr "major"
 
 package code;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Enumeration;
+
 /*from bmp class */
 import java.io.File;
 import java.io.FileInputStream;
@@ -29,11 +30,8 @@ import javax.comm.UnsupportedCommOperationException;
 
 public class SimpleRead {
 	private static final char[] IMAGE_START = { '*', 'R', 'D', 'Y', '*' };
-	private static final char[] IMAGE_END = { '*', 'F', 'I', 'N', '*' };
 	private static final int WIDTH = /* 320 */ 320 * 2;
-
 	private static final int HEIGHT = /* 240 */ 240 * 2;
-	private List<Integer> bayer_raw_rgb = new ArrayList<>();
 
 	private static CommPortIdentifier portId;
 	InputStream inputStream;
@@ -54,8 +52,6 @@ public class SimpleRead {
 	}
 
 	public SimpleRead() {
-		int[][] rgb = new int[HEIGHT][WIDTH];
-		int[][] rgb2 = new int[WIDTH][HEIGHT];
 
 		try {
 			serialPort = (SerialPort) portId.open("SimpleReadApp", 1000);
@@ -73,128 +69,158 @@ public class SimpleRead {
 				}
 				;
 				System.out.println("img START: " + counter);
-				/*
-				 * while (!isImageEnd_and_add_to_bayer_raw_list(inputStream, 0)) { } ;
-				 * System.out.println("img END: " + counter); System.out.println("bayer size: "
-				 * + bayer_raw_rgb.size()); bayer_raw_rgb.removeAll(bayer_raw_rgb);
-				 */
 
 				int[][] pxmap = new int[WIDTH][HEIGHT];
+				int isZero = 0; // number of isZeros in img tells alot about how much it is corrupted
 				for (int y = 0; y < HEIGHT; y++) {
 					for (int x = 0; x < WIDTH; x++) {
 						int temp = read(inputStream);
 						pxmap[x][y] = temp;
+						if (temp == 0)
+							isZero++;
+					}
+				}
+				// bayer raw to rgb(see
+				// https://documentation.euresys.com/Products/MultiCam/MultiCam_6_16/Content/MultiCam_6_7_HTML_Documentation/100280.htm:
+				// Each pixel only has one given value for either R,G o B.
+				// To get the missing values you use neighboring pixels that have the value
+				// given.
+				// you calculate:
+
+				// For red pixel locations (case of R22)
+				// G <= Mean4(GN, GS, GE, GW)
+				// B <= Mean4(BNE, BSE, BSW, BNW)
+
+				// For green pixel locations in lines with blue (case of G23)
+				// R <= Mean4(RN, RS)
+				// B <= Mean4(BE, BW)
+
+				// For green pixel locations in lines with red (case of G32)
+				// R <= Mean2(RE, RW)
+				// B <= Mean2(BN, BS)
+
+				// For blue pixel locations (case of B33)
+				// G <= Mean4(GN, GS, GE, GW)
+				// R <= Mean4(RNE, RSE, RSW, RNW)
+
+				// optionally you can use
+				// Median2Of4(a,b,c,d) =
+				// Mean2{ Min [ Max(a,b), Max(c,d) ] , Max [Min(a,b),Min(c,d) ] }
+				// instead
+
+				// Ill use the simple method
+				// I make an array for each colorplane and combine the colorplains at the end.
+				// I suppose top row is B G B G not R G R G
+				int[][] rPlane = new int[WIDTH][HEIGHT];
+				int[][] gPlane = new int[WIDTH][HEIGHT];
+				int[][] bPlane = new int[WIDTH][HEIGHT];
+
+				for (int y = 0; y < HEIGHT; y++) {
+					for (int x = 0; x < WIDTH; x++) {
+						if (y % 2 == 0) {
+							// sidenote: I spent 2 hours until I realized that my images weren't colorful
+							// because I switched up the content of the if satements.
+
+							if (x % 2 == 0) { // blue
+
+								rPlane[x][y] = compAVRG(new int[][] { { x - 1, y - 1 }, { x + 1, y - 1 },
+										{ x + 1, y + 1 }, { x - 1, y + 1 } }, pxmap);
+								gPlane[x][y] = compAVRG(
+										new int[][] { { x, y - 1 }, { x + 1, y }, { x, y + 1 }, { x - 1, y } }, pxmap);
+								bPlane[x][y] = pxmap[x][y];
+
+							} else { // green inline with blue
+
+								rPlane[x][y] = compAVRG(new int[][] { { x, y - 1 }, { x, y + 1 } }, pxmap);
+								gPlane[x][y] = pxmap[x][y];
+								bPlane[x][y] = compAVRG(new int[][] { { x - 1, y }, { x + 1, y } }, pxmap);
+
+							}
+						} else {
+							if (x % 2 == 1) { // red
+								rPlane[x][y] = pxmap[x][y];
+								gPlane[x][y] = compAVRG(
+										new int[][] { { x, y - 1 }, { x + 1, y }, { x, y + 1 }, { x - 1, y } }, pxmap);
+								bPlane[x][y] = compAVRG(new int[][] { { x - 1, y - 1 }, { x + 1, y - 1 },
+										{ x + 1, y + 1 }, { x - 1, y + 1 } }, pxmap);
+
+							} else { // green inline with red
+								rPlane[x][y] = compAVRG(new int[][] { { x - 1, y }, { x + 1, y } }, pxmap);
+								gPlane[x][y] = pxmap[x][y];
+								bPlane[x][y] = compAVRG(new int[][] { { x, y - 1 }, { x, y + 1 } }, pxmap);
+
+							}
+						}
+
 					}
 				}
 
-				// BMP .ppm
-
-				// P3
-				// # Ein Farbbild der Größe 3 × 2 Pixel, maximaler Helligkeit 255.
-				// # Darauf folgen die RGB-Tripel.
-				// 3 2
-				// 255
-				// 255 0 0 0 255 0 0 0 255
-				// 255 255 0 255 255 255 0 0 0
-
 				LocalDateTime now = LocalDateTime.now();
-				/*
-				 * int year = now.getYear(); int month = now.getMonthValue(); int day =
-				 * now.getDayOfMonth();
-				 */
+
 				int hour = now.getHour();
 				int minute = now.getMinute();
 				int second = now.getSecond();
 
+				// saved as BMP .ppm
+				// EXAMPLE:
+				// P3 <- specific type
+				// 3 2 #<-width height
+				// 255 #<- color range
+				// 255 0 0 0 255 0 0 0 255 <- r g b r g b r g b ....
+				// 255 255 0 255 255 255 0 0 0
+
 				try {
-					FileOutputStream fos = new FileOutputStream(
-							new File("c:/out/" + counter + "_t_" + hour + "_" + minute + "_" + second + ".ppm"));
+					FileOutputStream fos = new FileOutputStream(new File("c:/out/" + counter + "_t" + hour + "_"
+							+ minute + "_" + second + "_isZero_" + isZero + ".ppm"));
 					fos.write(("P3\n").getBytes(StandardCharsets.US_ASCII));
-					fos.write((WIDTH + " " + HEIGHT + "\n").getBytes(StandardCharsets.US_ASCII));
+					// flip width and height to get an upside img
+					fos.write((HEIGHT + " " + WIDTH + "\n").getBytes(StandardCharsets.US_ASCII));
 					fos.write(("255\n").getBytes(StandardCharsets.US_ASCII));
-					for (int y = 0; y < HEIGHT; y++) {
+					for (int x = WIDTH - 1; x >= 0; x--) {
 						String row = "";
-						for (int x = 0; x < WIDTH; x++) {
-							String temp = Integer.toString(pxmap[x][y]) + " ";
-							String str;
-							if (y % 2 == 0) {
-								if (x % 2 == 0) { // green
-									str = "0 " + temp + " 0";
-								} else { // blue
-									str = "0 0 " + temp;
-								}
-							} else {
-								if (x % 2 == 1) {
-									// green
-									str = "0 " + temp + " 0";
-								} else { // red
-									str = temp + " 0 0";
-								}
-							}
-							row += str + " ";
+
+						for (int y = 0; y < HEIGHT; y++) {
+							String str = "";
+							// save as rgb
+							str += rPlane[x][y] + " ";
+							str += gPlane[x][y] + " ";
+							str += bPlane[x][y] + " ";
+							row += str;
+
 						}
 						fos.write((row + "\n").getBytes(StandardCharsets.US_ASCII));
 					}
 
 					fos.close();
-					System.out.println("Saved pxmap: " + (counter++));
+					System.out.println("Saved pxmap: " + (counter) + " isZeros: " + isZero);
+
 				} catch (IOException e) {
 					throw new IllegalStateException(e);
 				}
 
-				/* System.out.println(array[i]); */
+				// bayer_raw ppm / bitmap
 				/*
-				 * if(i%4==0){ System.out.println("Cb"+cbs+" "+temp);
+				 * try { FileOutputStream fos = new FileOutputStream( new File("c:/out/" +
+				 * counter + "_noCOLOR_" + hour + "_" + minute + "_" + second + ".ppm"));
+				 * fos.write(("P3\n").getBytes(StandardCharsets.US_ASCII)); fos.write((WIDTH +
+				 * " " + HEIGHT + "\n").getBytes(StandardCharsets.US_ASCII));
+				 * fos.write(("255\n").getBytes(StandardCharsets.US_ASCII)); for (int y = 0; y <
+				 * HEIGHT; y++) { String row = ""; for (int x = 0; x < WIDTH; x++) { String temp
+				 * = Integer.toString(pxmap[x][y]); String str; if (y % 2 == 0) { if (x % 2 ==
+				 * 0) { // blue str = "0 0 " + temp + " "; } else { //green
 				 * 
-				 * }else if(((i+1)%4)==0){ System.out.println("Y"+(ysr++)+" "+temp); }else
-				 * if(((i+2)%4)==0){ System.out.println("Cr"+(cbs++)+" "+temp); cbs++; }else{
-				 * System.out.println("Y"+(ysr++)+" "+temp); }
+				 * str = "0 " + temp + " 0 "; } } else { if (x % 2 == 1) { // blue str = temp +
+				 * " 0 0 "; } else { //green
+				 * 
+				 * str = "0 " + temp + " 0 "; } }
+				 * 
+				 * row += str; } fos.write((row + "\n" ).getBytes(StandardCharsets.US_ASCII)); }
+				 * 
+				 * fos.close(); System.out.println("Saved no color: " + (counter));
+				 * 
+				 * } catch (IOException e) { throw new IllegalStateException(e); }
 				 */
-
-				/*
-				 * double cb = array[i];
-				 * 
-				 * double y1= array[i +1]; double cr= array[i +2];
-				 * 
-				 * double y2= array[i +3]; double r1 = y1 +cr/0.877; double r2 = y2 +cr/0.877;
-				 * double g1 = y1 - 0.39393*cb - 0.58081*cr;
-				 * 
-				 * double g2 = y2 - 0.39393*cb - 0.58081*cr; double b1 = y1 + cb/0.493; double
-				 * b2 =y2 + cb/0.493; System.out.println((int)r1+" "+(int)g1+" "+(int)b1);
-				 * System.out.println((int)r1+" "+(int)g1+" "+(int)b1);
-				 */
-				/*
-				 * System.out.println(y1+" "+cb+" "+cr); System.out.println(y2+" "+cb+" "+cr);
-				 */
-
-				/*
-				 * while(bayer_raw_length>counters){ int temp = read(inputStream);
-				 * 
-				 * System.out.println("Binary: "+Integer.toBinaryString(temp));
-				 * System.out.println("YUV: "+(counters%3)+" "+temp);
-				 * System.out.println("Binary: "+Integer.toBinaryString(temp& 0xFF));
-				 * System.out.println("Binary: "+Integer.toBinaryString(((temp& 0xFF) << 8)));
-				 * System.out.println("Binary: "+Integer.toBinaryString(((temp& 0xFF) << 16)));
-				 * System.out.println("Binary: "+Integer.toBinaryString(((temp& 0xFF) << 32)));
-				 * System.out.println("Binary: "+Integer.toBinaryString(((temp& 0xFF) << 64)));
-				 * System.out.println("stream: " + bayer_raw_length + " "+temp+" "+(temp&
-				 * 0xFF)+" "+((temp & 0xFF) << 8)+" "+((temp & 0xFF) << 16) ); counters++; }
-				 */
-
-				/*
-				 * for (int y = 0; y < HEIGHT; y++) { for (int x = 0; x < WIDTH; x++) { int temp
-				 * = read(inputStream); if(temp==48){System.out.println(temp);} else
-				 * if(temp==111){System.out.println(temp);}
-				 * 
-				 * // r rgb[y][x] = ((temp & 0xFF) << 16) | ((temp & 0xFF) << 8) | (temp &
-				 * 0xFF); //arr: 16777215 = 16711680 65280 255 "plus"? } } //rgb2 flips image
-				 * from rot(90deg) to rot(0) for (int y = 0; y < HEIGHT; y++) { for (int x = 0;
-				 * x < WIDTH; x++) { rgb2[x][y] = rgb[y][x]; } }
-				 * 
-				 * BMP bp = new BMP(); bp.saveBMP("c:/out/" + (counter++) + ".bmp", rgb2);
-				 * System.out.println("Saved image: " + counter);
-				 */
-
+				counter++;
 			}
 
 		} catch (Exception e) {
@@ -223,16 +249,25 @@ public class SimpleRead {
 		return true;
 	}
 
-	private boolean isImageEnd_and_add_to_bayer_raw_list(InputStream inputStream, int index) throws IOException {
-		int temp = read(inputStream);
-		bayer_raw_rgb.add(temp);
-		if (index < IMAGE_END.length) {
-			if (IMAGE_END[index] == temp) {
-				return isImageEnd_and_add_to_bayer_raw_list(inputStream, ++index);
-			} else {
-				return false;
-			}
+	private int compAVRG(int[][] arr, int[][] pxmap) {
+		int divider = 0;
+		int val = 0;
+
+		for (int i = 0; i < arr.length; i++) {
+			int temp[] = arr[i];
+			if ((temp[0] + 1 <= 0 || temp[0] + 1 >= WIDTH || temp[1] + 1 <= 0 || temp[1] + 1 >= HEIGHT
+					|| temp.length == 0))
+				continue;
+			divider++;
+			val += pxmap[temp[0]][temp[1]];
+
 		}
-		return true;
+
+		if (divider == 0) {
+			return 0;
+		}
+		return (int) (val / divider);
+
 	}
+
 }
